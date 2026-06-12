@@ -1,0 +1,6 @@
+@DataIntegrationHub_HostAddress = http://localhost:5070
+
+GET {{DataIntegrationHub_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###
