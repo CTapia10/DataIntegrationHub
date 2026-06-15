@@ -1,6 +1,12 @@
 using Serilog;
 using DataIntegrationHub.Data;
 using Microsoft.EntityFrameworkCore;
+using DataIntegrationHub.Settings;
+using DataIntegrationHub.Interfaces;
+using DataIntegrationHub.Services;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.IdentityModel.Tokens;
+using System.Text;
 
 namespace DataIntegrationHub;
 
@@ -26,9 +32,44 @@ public class Program
 
             var builder = WebApplication.CreateBuilder(args);
 
-            // 2. Use Serilog as the logging provider
-            builder.Host.UseSerilog();
+            // 1. Mapeamos la configuración de JWT (Options Pattern)
+            builder.Services.Configure<JwtSettings>(
+                builder.Configuration.GetSection(JwtSettings.SectionName));
 
+            // 2. Registramos nuestro servicio generador de tokens
+            builder.Services.AddScoped<IJwtTokenGenerator, JwtTokenGenerator>();
+
+            // 3. Configuramos la validación del Token
+            builder.Services.AddAuthentication(options =>
+            {
+                // Establecemos JWT como el esquema por defecto para evitar tener que especificarlo en cada endpoint
+                options.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
+                options.DefaultChallengeScheme = JwtBearerDefaults.AuthenticationScheme;
+            })
+            .AddJwtBearer(options =>
+            {
+                var jwtSettings = builder.Configuration.GetSection(JwtSettings.SectionName).Get<JwtSettings>();
+
+                // Si jwtSettings es null (problema de lectura), lanzamos excepción para que la API no arranque de forma insegura
+                ArgumentNullException.ThrowIfNull(jwtSettings);
+
+                options.TokenValidationParameters = new TokenValidationParameters
+                {
+                    ValidateIssuer = true,
+                    ValidateAudience = true,
+                    ValidateLifetime = true,
+                    ValidateIssuerSigningKey = true,
+                    ValidIssuer = jwtSettings.Issuer,
+                    ValidAudience = jwtSettings.Audience,
+                    IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtSettings.SecretKey))
+                };
+            });
+
+            // Agregamos el servicio de autorización
+            builder.Services.AddAuthorization();
+
+            builder.Host.UseSerilog();
+            
 
             var connectionString = builder.Configuration.GetConnectionString("DefaultConnection");
             builder.Services.AddDbContext<ApplicationDbContext>(options =>
@@ -36,7 +77,7 @@ public class Program
 
             
 
-            // 3. Add services to the container
+            // 4. Add services to the container
             builder.Services.AddControllers();
 
             // Learn more about configuring Swagger/OpenAPI at https://aka.ms/aspnetcore/swashbuckle
@@ -44,6 +85,8 @@ public class Program
             builder.Services.AddSwaggerGen();
 
             var app = builder.Build();
+
+
 
             // 4. Configure the HTTP request pipeline
             if (app.Environment.IsDevelopment())
@@ -54,7 +97,13 @@ public class Program
 
             app.UseHttpsRedirection();
 
+            // Primero validamos QUIÉN es el usuario y si su token es válido (Authentication)
+            app.UseAuthentication();
+
+            // Después validamos QUÉ tiene permitido hacer según su rol (Authorization)
             app.UseAuthorization();
+
+            app.MapControllers();
 
             app.MapControllers();
 
